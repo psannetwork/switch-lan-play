@@ -41,6 +41,8 @@ if (${CMAKE_CXX_COMPILER_ID} STREQUAL GNU)
         lan-play
         PRIVATE "-Wall"
         PRIVATE "-Wno-unused-function"
+        PRIVATE "-Wno-maybe-uninitialized"
+        PRIVATE "-Wno-error"
     )
 endif()
 

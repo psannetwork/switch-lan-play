@@ -182,7 +182,7 @@ int parse_arguments(int argc, char **argv)
             return -1;
         }
     }
-    if (options.relay_username) {
+    if (options.relay_username && strlen(options.relay_username) > 0) {
         if (!options.relay_password && !options.relay_password_file) {
             eprintf("username given but password not given\n");
             return -1;

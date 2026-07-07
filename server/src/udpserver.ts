@@ -139,8 +139,12 @@ export class SLPServer {
     this.server = server
     setInterval(() => {
       const str = `  Client count: ${this.manager.size} upload: ${this.byteLastSec.upload / 1000}KB/s download: ${this.byteLastSec.download / 1000}KB/s`
-      process.stdout.write(str)
-      process.stdout.write('\b'.repeat(str.length))
+      try {
+        process.stdout.write(str)
+        process.stdout.write('\b'.repeat(str.length))
+      } catch (e) {
+        // Ignore EPIPE errors
+      }
       this.byteLastSec.upload = 0
       this.byteLastSec.download = 0
       this.clearExpire()

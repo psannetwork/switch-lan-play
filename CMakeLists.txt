@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.16)
 project (SwitchLanPlay)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,10 +32,21 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     add_definitions(-DLANPLAY_DARWIN)
 endif()
 
+if (${CMAKE_CXX_COMPILER_ID} STREQUAL GNU)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-error")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error")
+endif()
+
 # add external libraries
 include(external/external.cmake)
+
+option(BUILD_GUI "Build the GUI" ON)
 
 add_subdirectory(base)
 add_subdirectory(lwip)
 add_subdirectory(uv_lwip)
 add_subdirectory(src)
+
+if(BUILD_GUI)
+    add_subdirectory(gui)
+endif()

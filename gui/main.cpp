@@ -1,0 +1,267 @@
+#include "imgui.h"
+#include "imgui_impl_sdl2.h"
+#include "imgui_impl_opengl3.h"
+#include <SDL.h>
+#include <SDL_opengl.h>
+#include <stdio.h>
+#include <string>
+#include <vector>
+#include <iostream>
+#include <array>
+#include <memory>
+
+#ifdef _WIN32
+#include <windows.h>
+#define POPEN _popen
+#define PCLOSE _pclose
+
+std::string get_executable_dir() {
+    char buffer[MAX_PATH];
+    GetModuleFileNameA(NULL, buffer, MAX_PATH);
+    std::string::size_type pos = std::string(buffer).find_last_of("\\/");
+    return std::string(buffer).substr(0, pos);
+}
+#else
+#include <cstdio>
+#define POPEN popen
+#define PCLOSE pclose
+std::string get_executable_dir() {
+    // Linux/MSYS2での簡易実装（カレントディレクトリをベースにする）
+    return ".";
+}
+#endif
+
+// プロセス管理用のグローバル変数
+#ifdef _WIN32
+HANDLE process_handle = nullptr;
+#else
+FILE* pipe_handle = nullptr;
+#endif
+std::vector<std::string> log_buffer;
+
+void run_process(const std::string& cmd, bool absolute_cmd = false) {
+#ifdef _WIN32
+    if (process_handle) return;
+    
+    std::string base_dir = get_executable_dir();
+    std::string full_cmd = absolute_cmd ? cmd : (base_dir + "\\" + cmd);
+    
+    STARTUPINFOA si = { sizeof(si) };
+    PROCESS_INFORMATION pi = { 0 };
+    if (CreateProcessA(NULL, (LPSTR)full_cmd.c_str(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        process_handle = pi.hProcess;
+        CloseHandle(pi.hThread);
+        log_buffer.push_back("Started: " + full_cmd);
+    }
+#else
+    if (pipe_handle) return; 
+    
+    std::string base_dir = get_executable_dir();
+    std::string full_cmd = absolute_cmd ? cmd : (base_dir + "/" + cmd);
+    
+    pipe_handle = POPEN(full_cmd.c_str(), "r");
+    log_buffer.push_back("Started: " + full_cmd);
+#endif
+}
+
+void stop_process() {
+#ifdef _WIN32
+    if (process_handle) {
+        TerminateProcess(process_handle, 0);
+        CloseHandle(process_handle);
+        process_handle = nullptr;
+        log_buffer.push_back("Process stopped.");
+    }
+#else
+    if (pipe_handle) {
+        PCLOSE(pipe_handle);
+        pipe_handle = nullptr;
+        log_buffer.push_back("Process stopped.");
+    }
+#endif
+}
+
+enum Language { LANG_EN, LANG_JA };
+Language current_lang = LANG_EN;
+
+// ローカライズされた文字列を取得する関数
+const char* L(const char* en, const char* ja) {
+    return (current_lang == LANG_JA) ? ja : en;
+}
+
+int main(int argc, char* argv[]) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) return -1;
+
+    const char* glsl_version = "#version 130";
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+
+    // ウィンドウ作成（サイズを少し小さめに）
+    SDL_WindowFlags window_flags = (SDL_WindowFlags)(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    SDL_Window* window = SDL_CreateWindow("Switch LAN Play UI", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 800, 600, window_flags);
+    SDL_GLContext gl_context = SDL_GL_CreateContext(window);
+    SDL_GL_MakeCurrent(window, gl_context);
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui_ImplSDL2_InitForOpenGL(window, gl_context);
+    ImGui_ImplOpenGL3_Init(glsl_version);
+
+    // 日本語フォントをロード (Windows環境を想定してNoto Sans CJKなどを試す。フォントパスは環境依存)
+    // Windowsでは通常 C:\Windows\Fonts にあります
+    ImFontConfig font_config;
+    font_config.OversampleH = 1;
+    font_config.OversampleV = 1;
+    font_config.PixelSnapH = 1;
+    
+    // Noto Sans CJK JP を試みる（MSYS2環境のパスまたはWindowsフォントパス）
+    // とりあえず、システム上のフォントを見つける方法が簡易的だが、ここを修正
+    static const ImWchar ranges[] = { 0x0020, 0x00FF, 0x3000, 0x30FF, 0x4E00, 0x9FAF, 0 };
+    // フォントパスは絶対パスで指定するか、ランタイムで探す必要がある
+    // ここでは単純に日本語対応フォントをロードしようとする
+    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msgothic.ttc", 18.0f, &font_config, ranges);
+    io.FontGlobalScale = 1.0f; // サイズを調整
+
+    bool done = false;
+    static char port[10] = "11451";
+    static char server_password[64] = "";
+    static char client_password[64] = "";
+    static char addr[64] = "127.0.0.1";
+    static char nick[32] = "";
+
+    while (!done) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            ImGui_ImplSDL2_ProcessEvent(&event);
+            if (event.type == SDL_QUIT) done = true;
+        }
+
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplSDL2_NewFrame();
+        ImGui::NewFrame();
+
+        // フルスクリーン固定をやめ、ウィンドウサイズに追従させる
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+        
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
+        ImGui::Begin("Switch LAN Play Control", nullptr, window_flags);
+
+        // UI要素の間隔を広げるためのスタイル設定
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 5));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10, 15));
+
+        if (ImGui::BeginTabBar("ModeTabs")) {
+            // --- Settings ---
+            if (ImGui::BeginTabItem(L("Settings", "設定"))) {
+                if (ImGui::RadioButton("English", current_lang == LANG_EN)) current_lang = LANG_EN;
+                ImGui::SameLine();
+                if (ImGui::RadioButton("日本語", current_lang == LANG_JA)) current_lang = LANG_JA;
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem(L("Server", "サーバー"))) {
+                ImGui::Dummy(ImVec2(0, 10)); // 上部に余白
+                ImGui::InputText(L("Port", "ポート"), port, IM_ARRAYSIZE(port));
+                ImGui::InputText(L("Password", "パスワード"), server_password, IM_ARRAYSIZE(server_password), ImGuiInputTextFlags_Password);
+                
+                ImGui::Dummy(ImVec2(0, 5));
+                if (ImGui::Button(L("Start Server", "サーバー開始"), ImVec2(150, 40))) {
+                    // Windowsではnodeを使ってts-nodeを読み込むのが確実
+                    std::string cmd = "node server\\node_modules\\ts-node\\dist\\bin.js server\\src\\main.ts --port " + std::string(port);
+                    if (strlen(server_password) > 0) cmd += " --password " + std::string(server_password);
+                    run_process(cmd, true);
+                }
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(L("Client", "クライアント"))) {
+                ImGui::Dummy(ImVec2(0, 10));
+                ImGui::InputText(L("Server Address", "サーバーアドレス"), addr, IM_ARRAYSIZE(addr));
+                ImGui::InputText(L("Username", "ユーザー名"), nick, IM_ARRAYSIZE(nick));
+                ImGui::InputText(L("Password", "パスワード"), client_password, IM_ARRAYSIZE(client_password), ImGuiInputTextFlags_Password);
+                
+                ImGui::Dummy(ImVec2(0, 5));
+                if (ImGui::Button(L("Start Client", "クライアント開始"), ImVec2(200, 40))) {
+                    std::string server_addr = std::string(addr);
+                    if (server_addr.find(':') == std::string::npos) {
+                        server_addr += ":11451";
+                    }
+                    std::string cmd = "bin\\lan-play.exe --relay-server-addr " + server_addr;
+                    
+                    // ユーザー名とパスワードをチェックし、空の場合はフラグを追加しない
+                    std::string username = std::string(nick);
+                    std::string password_str = std::string(client_password);
+                    
+                    if (!username.empty()) {
+                        cmd += " --username " + username;
+                    }
+                    if (!password_str.empty()) {
+                        cmd += " --password " + password_str;
+                    }
+                    
+                    run_process(cmd);
+                }
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(L("How to setup switch", "Switchのセットアップ方法"))) {
+                ImGui::BeginChild("SetupInstructions", ImVec2(0, 0), true);
+                
+                ImGui::TextWrapped(L("You need to manually edit the configuration of your local network with this informations.", "ローカルネットワークの設定を手動で変更する必要があります。"));
+                ImGui::Separator();
+                ImGui::Dummy(ImVec2(0, 5));
+
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), L("Note:", "注意:"));
+                ImGui::TextWrapped(L("The IP address can be any from 10.13.0.1 to 10.13.255.254, excepting 10.13.37.1. But don't use the same IP address with your friend.", "IPアドレスは10.13.0.1から10.13.255.254の間であれば何でも構いません（10.13.37.1を除く）。ただし、フレンドと同じIPアドレスは使用しないでください。"));
+                ImGui::Dummy(ImVec2(0, 10));
+
+                ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), L("IP Address Settings", "IPアドレス設定"));
+                ImGui::Text(L("IP Address:   10.13.XX.YY", "IPアドレス:   10.13.XX.YY"));
+                ImGui::Text(L("Subnet Mask:  255.255.0.0", "サブネットマスク:  255.255.0.0"));
+                ImGui::Text(L("Gateway:      10.13.37.1", "ゲートウェイ:      10.13.37.1"));
+                ImGui::Dummy(ImVec2(0, 10));
+
+                ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), L("DNS settings (these are the 90DNS servers)", "DNS設定 (これらは90DNSサーバーです)"));
+                ImGui::Text(L("Primary DNS:   163.172.141.219", "優先DNS:   163.172.141.219"));
+                ImGui::Text(L("Secondary DNS: 207.246.121.77", "代替DNS: 207.246.121.77"));
+
+                ImGui::EndChild();
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+
+        ImGui::PopStyleVar(2); // StyleVarを元に戻す
+
+        ImGui::Dummy(ImVec2(0, 20));
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 10));
+        
+        if (ImGui::Button("Stop Process", ImVec2(120, 30))) stop_process();
+
+        ImGui::Dummy(ImVec2(0, 10));
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Logs:");
+        
+        // ログ領域のサイズを残り全体にする
+        ImGui::BeginChild("LogRegion", ImVec2(0, -10), true);
+        for (const auto& line : log_buffer) ImGui::TextUnformatted(line.c_str());
+        ImGui::EndChild();
+
+        ImGui::End();
+
+        ImGui::Render();
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        SDL_GL_SwapWindow(window);
+    }
+
+    stop_process();
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplSDL2_Shutdown();
+    ImGui::DestroyContext();
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return 0;
+}
