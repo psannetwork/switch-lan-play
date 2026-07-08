@@ -24,7 +24,7 @@
 ## ステップ2：プログラムの入手
 自分でビルド（構築）する必要がない場合、配布されている実行ファイル（バイナリ）を使用するのが最も簡単です。
 
-1. GitHubの [releases ページ](https://github.com/spacemeowx2/switch-lan-play/releases) にアクセスします。
+1. GitHubの [releases ページ](https://github.com/psannetwork/switch-lan-play/releases) にアクセスします。
 2. 最新のリリースから、Windows用の圧縮ファイル（`.zip` など）をダウンロードします。
 3. ダウンロードしたファイルを解凍（展開）します。
 4. 解凍したフォルダの中にある `lan-play-gui.exe` をダブルクリックして実行します。
