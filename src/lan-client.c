@@ -1,6 +1,39 @@
 #include "lan-play.h"
 #include "sha1.h"
 
+enum lan_client_type {
+    LAN_CLIENT_TYPE_KEEPALIVE = 0x00,
+    LAN_CLIENT_TYPE_IPV4 = 0x01,
+    LAN_CLIENT_TYPE_PING = 0x02,
+    LAN_CLIENT_TYPE_IPV4_FRAG = 0x03,
+    LAN_CLIENT_TYPE_AUTH_ME = 0x04,
+    LAN_CLIENT_TYPE_INFO = 0x10,
+};
+
+// Forward declarations
+int lan_client_send(struct lan_play *lan_play, uint8_t type, const uint8_t *packet, uint16_t len);
+
+static uint64_t last_ping_time = 0;
+
+int lan_client_send_ping(struct lan_play *lan_play) {
+    last_ping_time = uv_hrtime();
+    return lan_client_send(lan_play, LAN_CLIENT_TYPE_PING, NULL, 0);
+}
+
+int lan_client_send_info(struct lan_play *lan_play) {
+    return lan_client_send(lan_play, LAN_CLIENT_TYPE_INFO, NULL, 0);
+}
+
+void lan_client_ping_timer(uv_timer_t *handle) {
+    struct lan_play *lan_play = (struct lan_play *)handle->data;
+    lan_client_send_ping(lan_play);
+}
+
+void lan_client_info_timer(uv_timer_t *handle) {
+    struct lan_play *lan_play = (struct lan_play *)handle->data;
+    lan_client_send_info(lan_play);
+}
+
 struct lan_client_fragment_header {
     uint8_t src[4];
     uint8_t dst[4];
@@ -19,14 +52,6 @@ struct lan_client_fragment_header {
 #define LC_FRAG_PMTU 14
 #define LC_FRAG_HEADER_LEN 16
 
-enum lan_client_type {
-    LAN_CLIENT_TYPE_KEEPALIVE = 0x00,
-    LAN_CLIENT_TYPE_IPV4 = 0x01,
-    LAN_CLIENT_TYPE_PING = 0x02,
-    LAN_CLIENT_TYPE_IPV4_FRAG = 0x03,
-    LAN_CLIENT_TYPE_AUTH_ME = 0x04,
-    LAN_CLIENT_TYPE_INFO = 0x10,
-};
 struct ipv4_req {
     uv_udp_send_t req;
     char *packet;
@@ -124,6 +149,14 @@ int lan_client_init(struct lan_play *lan_play)
         LLOG(LLOG_ERROR, "uv_timer_start %d", ret);
         return ret;
     }
+
+    ret = uv_timer_init(loop, &lan_play->ping_timer);
+    lan_play->ping_timer.data = lan_play;
+    uv_timer_start(&lan_play->ping_timer, lan_client_ping_timer, 1000, 5000);
+
+    ret = uv_timer_init(loop, &lan_play->info_timer);
+    lan_play->info_timer.data = lan_play;
+    uv_timer_start(&lan_play->info_timer, lan_client_info_timer, 2000, 10000);
 
     lan_play->upload_byte = 0;
     lan_play->download_byte = 0;
@@ -389,44 +422,59 @@ void lan_client_on_recv_internal(struct lan_play *lan_play, uint8_t *buffer, uin
     case LAN_CLIENT_TYPE_IPV4:
         lan_client_process(lan_play, buffer + 1, recv_len - 1);
         break;
+    case LAN_CLIENT_TYPE_PING: {
+        uint64_t now = uv_hrtime();
+        uint64_t latency = (now - last_ping_time) / 1000000; // ms
+        FILE *f = fopen("latency.txt", "w");
+        if (f) {
+            fprintf(f, "%llu", (unsigned long long)latency);
+            fclose(f);
+        }
+        break;
+    }
     case LAN_CLIENT_TYPE_IPV4_FRAG:
         lan_client_process_frag(lan_play, buffer + 1, recv_len - 1);
         break;
     case LAN_CLIENT_TYPE_AUTH_ME:
         lan_client_process_auth_me(lan_play, buffer + 1, recv_len - 1);
         break;
-    case LAN_CLIENT_TYPE_INFO:
+    case LAN_CLIENT_TYPE_INFO: {
+        FILE *f = fopen("server_info.txt", "w");
+        if (f) {
+            fprintf(f, "%.*s", recv_len - 1, buffer + 1);
+            fclose(f);
+        }
         printf("[Server]: %.*s\n", recv_len - 1, buffer + 1);
         break;
+    }
     }
 }
 
 static int lan_client_send_raw(struct lan_play *lan_play, uv_buf_t *bufs, int bufs_len)
 {
-    int i, cur_pos, total_len, ret;
-    total_len = 0;
-    for (i = 0; i < bufs_len; i++) total_len += bufs[i].len;
+    int ret;
+    int total_len = 0;
+    for (int i = 0; i < bufs_len; i++) total_len += bufs[i].len;
     if (total_len == 0) return 0;
-
-    int header_len = lan_play->is_tcp ? 2 : 0;
-    char *packet = malloc(total_len + header_len);
-    cur_pos = header_len;
-    for (i = 0; i < bufs_len; i++) {
-        memcpy(packet + cur_pos, bufs[i].base, bufs[i].len);
-        cur_pos += bufs[i].len;
-    }
 
     if (lan_play->is_tcp) {
         // Add 2-byte length prefix (network byte order)
-        uint16_t len_prefix = htons(total_len);
-        memcpy(packet, &len_prefix, 2);
+        static uint16_t len_prefix;
+        len_prefix = htons(total_len);
         
-        uv_buf_t buf = uv_buf_init(packet, total_len + header_len);
-        ret = uv_write(&lan_play->tcp_write_req, (uv_stream_t*)&lan_play->client.tcp, &buf, 1, NULL);
+        uv_buf_t header_buf = uv_buf_init((char *)&len_prefix, 2);
+        
+        // Prepare scatter/gather array: [len_prefix, ...original bufs]
+        uv_buf_t *all_bufs = malloc(sizeof(uv_buf_t) * (bufs_len + 1));
+        all_bufs[0] = header_buf;
+        for (int i = 0; i < bufs_len; i++) all_bufs[i + 1] = bufs[i];
+        
+        ret = uv_write(&lan_play->tcp_write_req, (uv_stream_t*)&lan_play->client.tcp, all_bufs, bufs_len + 1, NULL);
+        free(all_bufs);
     } else {
-        uv_buf_t buf = uv_buf_init(packet, total_len);
+        // UDP sends can just use the provided bufs directly
         uv_udp_send_t *req = malloc(sizeof(uv_udp_send_t));
-        ret = uv_udp_send(req, &lan_play->client.udp, &buf, 1, (const struct sockaddr *)&lan_play->server_addr.u.addr, NULL);
+        ret = uv_udp_send(req, &lan_play->client.udp, bufs, bufs_len, (const struct sockaddr *)&lan_play->server_addr.u.addr, NULL);
     }
 
     lan_play->upload_packet++;

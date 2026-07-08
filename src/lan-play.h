@@ -68,6 +68,8 @@ struct lan_play {
 
     uv_timer_t client_keepalive_timer;
     uv_timer_t real_broadcast_timer;
+    uv_timer_t ping_timer;
+    uv_timer_t info_timer;
     int frag_id;
     int local_id;
     struct slp_addr_in server_addr;

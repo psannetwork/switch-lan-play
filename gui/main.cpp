@@ -283,6 +283,31 @@ int main(int argc, char* argv[]) {
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 10));
         
+        // --- Display Latency and Server Info ---
+        static std::string latency_str = "N/A";
+        static std::string info_str = "N/A";
+        static uint64_t last_check = 0;
+        if (SDL_GetTicks() - last_check > 1000) { // Update every 1s
+            std::ifstream ifs("latency.txt");
+            if (ifs.is_open()) {
+                std::getline(ifs, latency_str);
+                latency_str += " ms";
+            } else {
+                latency_str = "N/A";
+            }
+
+            std::ifstream ifs_info("server_info.txt");
+            if (ifs_info.is_open()) {
+                std::getline(ifs_info, info_str);
+            } else {
+                info_str = "N/A";
+            }
+            
+            last_check = SDL_GetTicks();
+        }
+        ImGui::Text("Latency: %s", latency_str.c_str());
+        ImGui::Text("Server Info: %s", info_str.c_str());
+
         if (ImGui::Button("Stop Process", ImVec2(120, 30))) stop_process();
 
         ImGui::Dummy(ImVec2(0, 10));

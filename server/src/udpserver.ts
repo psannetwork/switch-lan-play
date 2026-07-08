@@ -63,10 +63,45 @@ class User {
   constructor (public username: string) {}
 }
 
+class CircularBuffer {
+  private buffer: Buffer = Buffer.alloc(65536);
+  private head: number = 0;
+  private tail: number = 0;
+  private size: number = 0;
+
+  push(data: Buffer) {
+    if (this.size + data.length > this.buffer.length) {
+      const newBuffer = Buffer.alloc(this.size + data.length + 65536);
+      this.read(this.size).copy(newBuffer);
+      this.buffer = newBuffer;
+      this.head = 0;
+      this.tail = this.size;
+    }
+    data.copy(this.buffer, this.tail);
+    this.tail = (this.tail + data.length) % this.buffer.length;
+    this.size += data.length;
+  }
+
+  read(length: number): Buffer {
+    const res = Buffer.alloc(length);
+    for (let i = 0; i < length; i++) {
+      res[i] = this.buffer[(this.head + i) % this.buffer.length];
+    }
+    return res;
+  }
+
+  discard(length: number) {
+    this.head = (this.head + length) % this.buffer.length;
+    this.size -= length;
+  }
+
+  get length() { return this.size; }
+}
+
 class Peer {
   user?: User
   challenge?: Buffer
-  buffer: Buffer = Buffer.alloc(0);
+  buffer: CircularBuffer = new CircularBuffer();
   constructor(public rinfo: AddressInfo | { address: string, port: number }, public isTcp: boolean = false, public tcpSocket?: TcpSocket){}
 }
 
@@ -126,15 +161,16 @@ export class SLPServer {
         socket.on('data', (data) => {
           this.byteLastSec.download += data.length
           const peer = this.manager.get(rinfo, true, socket);
-          peer.buffer = Buffer.concat([peer.buffer, data]);
+          peer.buffer.push(data);
 
           while (peer.buffer.length >= 2) {
-            const packetLen = peer.buffer.readUInt16BE(0);
+            const packetLen = peer.buffer.read(2).readUInt16BE(0);
             if (peer.buffer.length < 2 + packetLen) {
               break;
             }
-            const packet = peer.buffer.slice(2, 2 + packetLen);
-            peer.buffer = peer.buffer.slice(2 + packetLen);
+            peer.buffer.discard(2);
+            const packet = peer.buffer.read(packetLen);
+            peer.buffer.discard(packetLen);
             this.onMessage(packet, rinfo, true, socket);
           }
         })
@@ -214,6 +250,9 @@ export class SLPServer {
       case ForwarderType.Ipv4Frag:
         this.onIpv4Frag(peer, payload)
         break
+      case ForwarderType.Info:
+        this.sendInfo(peer, `Clients: ${this.manager.size}`);
+        break;
     }
   }
   protected sendInfo (peer: Peer, info: string) {
