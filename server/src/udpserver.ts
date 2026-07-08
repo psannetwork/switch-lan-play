@@ -124,6 +124,7 @@ export class SLPServer {
         let buffer: Buffer | null = null
         socket.on('data', (data) => {
           this.byteLastSec.download += data.length
+          console.log(`DEBUG: Received ${data.length} bytes via TCP`);
           // Very simple framing: Assume one packet per message for now, 
           // but TCP needs proper length prefix if packets are fragmented.
           // Since the original protocol sends packet-by-packet,
