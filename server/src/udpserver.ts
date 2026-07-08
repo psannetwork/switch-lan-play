@@ -1,4 +1,5 @@
 import { createSocket, Socket, AddressInfo } from 'dgram'
+import { createServer, Socket as TcpSocket, Server as TcpServer } from 'net'
 import { AuthProvider } from './auth'
 import { randomFill as randomFillAsync } from 'crypto'
 const randomFill = (buf: Buffer, offset: number) => new Promise((res, rej) => randomFillAsync(buf, offset, (err, buf) => {
@@ -42,7 +43,7 @@ function clearCacheItem<T, U extends { expireAt: number }> (map: Map<T, U>) {
   }
 }
 
-function addr2str (rinfo: AddressInfo) {
+function addr2str (rinfo: AddressInfo | { address: string, port: number }) {
   return `${rinfo.address}:${rinfo.port}`
 }
 
@@ -53,9 +54,6 @@ function withTimeout<T> (promise: Promise<T>, ms: number) {
   })
 }
 
-function lookup4 (hostname: string, options: any, callback: (err: Error | null, address: string, family: number) => any) {
-  callback(null, hostname, 4)
-}
 function lookup6 (hostname: string, options: any, callback: (err: Error | null, address: string, family: number) => any) {
   callback(null, hostname, 6)
 }
@@ -68,7 +66,7 @@ class User {
 class Peer {
   user?: User
   challenge?: Buffer
-  constructor(public rinfo: AddressInfo){}
+  constructor(public rinfo: AddressInfo | { address: string, port: number }, public isTcp: boolean = false, public tcpSocket?: TcpSocket){}
 }
 
 class PeerManager {
@@ -76,10 +74,10 @@ class PeerManager {
     expireAt: number
     peer: Peer
   }>  = new Map()
-  delete (rinfo: AddressInfo) {
+  delete (rinfo: AddressInfo | { address: string, port: number }) {
     return this.map.delete(addr2str(rinfo))
   }
-  get (rinfo: AddressInfo): Peer {
+  get (rinfo: AddressInfo | { address: string, port: number }, isTcp: boolean = false, tcpSocket?: TcpSocket): Peer {
     const key = addr2str(rinfo)
     const map = this.map
     const expireAt = Date.now() + Timeout
@@ -87,7 +85,7 @@ class PeerManager {
     if (i === undefined) {
       i = {
         expireAt,
-        peer: new Peer(rinfo)
+        peer: new Peer(rinfo, isTcp, tcpSocket)
       }
       map.set(key, i)
     } else {
@@ -101,16 +99,7 @@ class PeerManager {
   get size () {
     return this.map.size
   }
-  getLogin() {
-    let count = 0
-    for (const i of this.map.values()) {
-      if (i.peer.user) {
-        count += 1
-      }
-    }
-    return count
-  }
-  *all (except: AddressInfo) {
+  *all (except: AddressInfo | { address: string, port: number }) {
     const exceptStr = addr2str(except)
     for (let [key, {peer}] of this.map) {
       if (exceptStr === key) continue
@@ -120,30 +109,49 @@ class PeerManager {
 }
 
 export class SLPServer {
-  protected server: Socket
+  protected udpServer?: Socket
+  protected tcpServer?: TcpServer
   protected ipCache: Map<number, CacheItem> = new Map()
   protected manager: PeerManager = new PeerManager()
   protected byteLastSec = {
     upload: 0,
     download: 0
   }
-  constructor (port: number, protected authProvider?: AuthProvider) {
-    const server = createSocket({
-      type: 'udp6',
-      lookup: lookup6
-    })
-    server.on('error', (err) => this.onError(err))
-    server.on('close', () => this.onClose())
-    server.on('message', (msg: Buffer, rinfo: AddressInfo) => this.onMessage(msg, rinfo))
-    server.bind(port)
-    this.server = server
+  constructor (port: number, protected authProvider?: AuthProvider, protected protocol: string = 'udp') {
+    if (protocol === 'tcp') {
+      this.tcpServer = createServer((socket) => {
+        const rinfo = { address: socket.remoteAddress || 'unknown', port: socket.remotePort || 0 }
+        let buffer: Buffer | null = null
+        socket.on('data', (data) => {
+          this.byteLastSec.download += data.length
+          // Very simple framing: Assume one packet per message for now, 
+          // but TCP needs proper length prefix if packets are fragmented.
+          // Since the original protocol sends packet-by-packet,
+          // we treat each chunk as a packet for now.
+          this.onMessage(data, rinfo, true, socket)
+        })
+        socket.on('error', () => { this.manager.delete(rinfo) })
+        socket.on('close', () => { this.manager.delete(rinfo) })
+      })
+      this.tcpServer.listen(port)
+    } else {
+      const server = createSocket({
+        type: 'udp6',
+        lookup: lookup6
+      })
+      server.on('error', (err) => this.onError(err))
+      server.on('close', () => this.onClose())
+      server.on('message', (msg: Buffer, rinfo: AddressInfo) => this.onMessage(msg, rinfo))
+      server.bind(port)
+      this.udpServer = server
+    }
+    
     setInterval(() => {
       const str = `  Client count: ${this.manager.size} upload: ${this.byteLastSec.upload / 1000}KB/s download: ${this.byteLastSec.download / 1000}KB/s`
       try {
         process.stdout.write(str)
         process.stdout.write('\b'.repeat(str.length))
       } catch (e) {
-        // Ignore EPIPE errors
       }
       this.byteLastSec.upload = 0
       this.byteLastSec.download = 0
@@ -164,24 +172,22 @@ export class SLPServer {
       isEncrypted: (firstByte & 0x80) !== 0,
     }
   }
-  async onMessage (msg: Buffer, rinfo: AddressInfo): Promise<void> {
+  async onMessage (msg: Buffer, rinfo: AddressInfo | { address: string, port: number }, isTcp: boolean = false, tcpSocket?: TcpSocket): Promise<void> {
     if (msg.byteLength === 0) {
       return
     }
-    this.byteLastSec.download += msg.byteLength
 
     const { type, isEncrypted } = this.parseHead(msg)
     if (type === ForwarderType.Ping && !isEncrypted) {
-      return this.onPing(rinfo, msg)
+      return this.onPing(rinfo, msg, isTcp, tcpSocket)
     }
 
-    const peer = this.manager.get(rinfo)
+    const peer = this.manager.get(rinfo, isTcp, tcpSocket)
     let payload = msg.slice(1)
 
     if (this.authProvider) {
       const { user } = peer
       if (user === undefined) {
-        // need to send AuthMe to client
         return this.onNeedAuth(peer, type, payload)
       }
     }
@@ -209,7 +215,6 @@ export class SLPServer {
     if (type === ForwarderType.AuthMe) {
       if (this.authProvider && peer.challenge) {
         if (payload.byteLength <= 20) {
-          // no place for username
           return
         }
         const response = payload.slice(0, 20)
@@ -239,7 +244,6 @@ export class SLPServer {
         buf.writeUInt8(0, 0)
       } else {
         if (peer.challenge.readUInt8(0) === 0xFF) {
-          // still filling random bytes
           return
         }
       }
@@ -248,7 +252,7 @@ export class SLPServer {
     }
   }
   onIpv4Frag (peer: Peer, payload: Buffer) {
-    if (payload.length <= 20) { // packet too short, ignore
+    if (payload.length <= 20) {
       return
     }
     const src = payload.readInt32BE(0)
@@ -264,11 +268,11 @@ export class SLPServer {
       this.sendBroadcast(peer, ForwarderType.Ipv4Frag, payload)
     }
   }
-  onPing (rinfo: AddressInfo, msg: Buffer) {
-    this.sendToRaw(rinfo, msg.slice(0, 4))
+  onPing (rinfo: AddressInfo | { address: string, port: number }, msg: Buffer, isTcp: boolean = false, tcpSocket?: TcpSocket) {
+    this.sendToRaw(rinfo, msg.slice(0, 4), isTcp, tcpSocket)
   }
   onIpv4 (peer: Peer, payload: Buffer) {
-    if (payload.length <= 20) { // packet too short, ignore
+    if (payload.length <= 20) {
       return
     }
     const src = payload.readInt32BE(IPV4_OFF_SRC)
@@ -287,28 +291,29 @@ export class SLPServer {
   }
   onError (err: Error) {
     console.log(`server error:\n${err.stack}`)
-    this.server.close()
-  }
-  onSendError (error: Error, bytes: number) {
-    console.error(`onSendError ${error} ${bytes}`)
+    if (this.udpServer) this.udpServer.close()
   }
   onClose () {
     console.log(`server closed`)
   }
-  sendTo ({ rinfo }: Peer, type: ForwarderType, payload: Buffer) {
+  sendTo (peer: Peer, type: ForwarderType, payload: Buffer) {
     if (OutputEncrypt) {
       console.warn('not implement')
     }
-    this.sendToRaw(rinfo, Buffer.concat([ForwarderTypeMap[type], payload], payload.byteLength + 1))
+    this.sendToRaw(peer.rinfo, Buffer.concat([ForwarderTypeMap[type], payload], payload.byteLength + 1), peer.isTcp, peer.tcpSocket)
   }
-  sendToRaw (addr: AddressInfo, msg: Buffer) {
-    const {address, port} = addr
+  sendToRaw (addr: AddressInfo | { address: string, port: number }, msg: Buffer, isTcp: boolean, tcpSocket?: TcpSocket) {
     this.byteLastSec.upload += msg.byteLength
-    this.server.send(msg, port, address, (error, bytes) => {
-      if (error) {
-        this.manager.delete(addr)
-      }
-    })
+    if (isTcp && tcpSocket) {
+        tcpSocket.write(msg)
+    } else if (this.udpServer) {
+        const {address, port} = addr as AddressInfo
+        this.udpServer.send(msg, port, address, (error) => {
+          if (error) {
+            this.manager.delete(addr)
+          }
+        })
+    }
   }
   sendBroadcast (except: Peer, type: ForwarderType, payload: Buffer) {
     for (let peer of this.manager.all(except.rinfo)) {

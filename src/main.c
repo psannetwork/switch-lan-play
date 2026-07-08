@@ -80,6 +80,7 @@ int parse_arguments(int argc, char **argv)
     options.rpc = NULL;
     options.rpc_token = NULL;
     options.rpc_protocol = NULL;
+    options.protocol = "udp";
 
     int i;
     for (i = 1; i < argc; i++) {
@@ -101,6 +102,10 @@ int parse_arguments(int argc, char **argv)
             CHECK_PARAM();
             options.relay_server_addr = argv[i + 1];
             i++;
+        } else if (!strcmp(arg, "--tcp")) {
+            options.protocol = "tcp";
+        } else if (!strcmp(arg, "--udp")) {
+            options.protocol = "udp";
         } else if (!strcmp(arg, "--username")) {
             CHECK_PARAM();
             options.relay_username = argv[i + 1];

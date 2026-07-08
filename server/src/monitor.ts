@@ -29,7 +29,7 @@ export class ServerMonitor {
     this.app.use(cors())
     this.app.use(this.router.routes())
     this.app.listen(port)
-    console.log(`\nMonitor service started on port ${port}/tcp`)
+    console.log(`\nMonitoring API service (HTTP) started on port ${port}/tcp`)
     console.log(`***************************************`)
   }
 

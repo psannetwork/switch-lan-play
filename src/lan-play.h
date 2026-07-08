@@ -52,13 +52,20 @@ struct lan_play {
     uv_loop_t *loop;
     uv_pcap_t pcap;
     uint8_t client_buf[CLIENT_RECV_BUF_LEN];
-    uv_udp_send_t client_send_req;
+    // uv_udp_send_t client_send_req; // No longer just udp
 
     // lan_client
     int pmtu;
     bool broadcast;
     bool next_real_broadcast;
-    uv_udp_t client;
+    bool is_tcp;
+    union {
+        uv_udp_t udp;
+        uv_tcp_t tcp;
+    } client;
+    uv_write_t tcp_write_req;
+    uv_udp_send_t udp_send_req;
+
     uv_timer_t client_keepalive_timer;
     uv_timer_t real_broadcast_timer;
     int frag_id;
@@ -108,6 +115,7 @@ struct cli_options {
     char *rpc;
     char *rpc_token;
     char *rpc_protocol;
+    char *protocol;
 };
 extern struct cli_options options;
 extern struct lan_play real_lan_play;

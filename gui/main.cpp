@@ -9,6 +9,8 @@
 #include <iostream>
 #include <array>
 #include <memory>
+#include <fstream>
+#include <sstream>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -84,6 +86,28 @@ void stop_process() {
 enum Language { LANG_EN, LANG_JA };
 Language current_lang = LANG_EN;
 
+void save_settings(Language lang, int s_proto, int c_proto) {
+    std::ofstream ofs(get_executable_dir() + "/settings.txt");
+    ofs << "lang=" << lang << "\n";
+    ofs << "s_proto=" << s_proto << "\n";
+    ofs << "c_proto=" << c_proto << "\n";
+}
+
+void load_settings(Language &lang, int &s_proto, int &c_proto) {
+    std::ifstream ifs(get_executable_dir() + "/settings.txt");
+    std::string line;
+    while (std::getline(ifs, line)) {
+        size_t pos = line.find('=');
+        if (pos != std::string::npos) {
+            std::string key = line.substr(0, pos);
+            std::string val = line.substr(pos + 1);
+            if (key == "lang") lang = (Language)std::stoi(val);
+            else if (key == "s_proto") s_proto = std::stoi(val);
+            else if (key == "c_proto") c_proto = std::stoi(val);
+        }
+    }
+}
+
 // ローカライズされた文字列を取得する関数
 const char* L(const char* en, const char* ja) {
     return (current_lang == LANG_JA) ? ja : en;
@@ -131,6 +155,10 @@ int main(int argc, char* argv[]) {
     static char client_password[64] = "";
     static char addr[64] = "127.0.0.1";
     static char nick[32] = "";
+    static int server_protocol = 0; // 0: UDP, 1: TCP
+    static int client_protocol = 0; // 0: UDP, 1: TCP
+
+    load_settings(current_lang, server_protocol, client_protocol);
 
     while (!done) {
         SDL_Event event;
@@ -157,21 +185,32 @@ int main(int argc, char* argv[]) {
         if (ImGui::BeginTabBar("ModeTabs")) {
             // --- Settings ---
             if (ImGui::BeginTabItem(L("Settings", "設定"))) {
-                if (ImGui::RadioButton("English", current_lang == LANG_EN)) current_lang = LANG_EN;
+                if (ImGui::RadioButton("English", current_lang == LANG_EN)) {
+                    current_lang = LANG_EN;
+                    save_settings(current_lang, server_protocol, client_protocol);
+                }
                 ImGui::SameLine();
-                if (ImGui::RadioButton("日本語", current_lang == LANG_JA)) current_lang = LANG_JA;
+                if (ImGui::RadioButton("日本語", current_lang == LANG_JA)) {
+                    current_lang = LANG_JA;
+                    save_settings(current_lang, server_protocol, client_protocol);
+                }
                 ImGui::EndTabItem();
             }
 
             if (ImGui::BeginTabItem(L("Server", "サーバー"))) {
                 ImGui::Dummy(ImVec2(0, 10)); // 上部に余白
                 ImGui::InputText(L("Port", "ポート"), port, IM_ARRAYSIZE(port));
+                if (ImGui::RadioButton("UDP##server", &server_protocol, 0)) save_settings(current_lang, server_protocol, client_protocol);
+                ImGui::SameLine();
+                if (ImGui::RadioButton("TCP##server", &server_protocol, 1)) save_settings(current_lang, server_protocol, client_protocol);
                 ImGui::InputText(L("Password", "パスワード"), server_password, IM_ARRAYSIZE(server_password), ImGuiInputTextFlags_Password);
                 
                 ImGui::Dummy(ImVec2(0, 5));
                 if (ImGui::Button(L("Start Server", "サーバー開始"), ImVec2(150, 40))) {
                     // Windowsではnodeを使ってts-nodeを読み込むのが確実
                     std::string cmd = "node server\\node_modules\\ts-node\\dist\\bin.js server\\src\\main.ts --port " + std::string(port);
+                    if (server_protocol == 1) cmd += " --protocol tcp";
+                    else cmd += " --protocol udp";
                     if (strlen(server_password) > 0) cmd += " --password " + std::string(server_password);
                     run_process(cmd, true);
                 }
@@ -180,6 +219,9 @@ int main(int argc, char* argv[]) {
             if (ImGui::BeginTabItem(L("Client", "クライアント"))) {
                 ImGui::Dummy(ImVec2(0, 10));
                 ImGui::InputText(L("Server Address", "サーバーアドレス"), addr, IM_ARRAYSIZE(addr));
+                if (ImGui::RadioButton("UDP##client", &client_protocol, 0)) save_settings(current_lang, server_protocol, client_protocol);
+                ImGui::SameLine();
+                if (ImGui::RadioButton("TCP##client", &client_protocol, 1)) save_settings(current_lang, server_protocol, client_protocol);
                 ImGui::InputText(L("Username", "ユーザー名"), nick, IM_ARRAYSIZE(nick));
                 ImGui::InputText(L("Password", "パスワード"), client_password, IM_ARRAYSIZE(client_password), ImGuiInputTextFlags_Password);
                 
@@ -190,6 +232,8 @@ int main(int argc, char* argv[]) {
                         server_addr += ":11451";
                     }
                     std::string cmd = "bin\\lan-play.exe --relay-server-addr " + server_addr;
+                    if (client_protocol == 1) cmd += " --tcp";
+                    else cmd += " --udp";
                     
                     // ユーザー名とパスワードをチェックし、空の場合はフラグを追加しない
                     std::string username = std::string(nick);

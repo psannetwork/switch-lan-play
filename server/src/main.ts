@@ -16,6 +16,7 @@ function parseArgs2Obj(args: string[]) {
 }
 
 function main(argv: string[]) {
+  console.log("DEBUG: main() called with:", argv);
   let argsObj = parseArgs2Obj(argv);
 
   let provider: AuthProvider | undefined
@@ -37,7 +38,9 @@ function main(argv: string[]) {
     console.log(`using simple auth with username=${username} password=${password}`);
   }
   const portNum = parseInt(argsObj.port || '11451')
-  let s = new SLPServer(portNum, provider)
+  const protocol = argsObj.protocol || 'udp'
+  console.log(`[Data Transport] SLP server started on port ${portNum} using ${protocol.toUpperCase()} protocol`)
+  let s = new SLPServer(portNum, provider, protocol)
   let monitor = new ServerMonitor(s)
   monitor.start(portNum)
 }
