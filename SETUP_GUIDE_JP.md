@@ -12,12 +12,9 @@
 ## ステップ1：パケットキャプチャ用ソフトウェアのインストール
 `switch-lan-play` がSwitchの通信を中継するために、ネットワークの通信を読み取るソフトウェアが必要です。
 
-かつては「WinPcap」が主流でしたが、現在はより新しく安全な **「Npcap」** を使用します。WinPcapは開発が終了しているため、必ずNpcapを入れてください。
-
-1. [Npcap公式サイト](https://nmap.org/npcap/) にアクセスします。
-2. 「Download」セクションから、最新のインストーラー（Npcap installer）をダウンロードします。
+1. [WinPcap公式サイト](https://www.winpcap.org/install/bin/WinPcap_4_1_3.exe) にアクセスします。
+2. 「Download」セクションから、最新のインストーラー（WinPcap installer）をダウンロードします。
 3. ダウンロードしたファイルを実行し、指示に従ってインストールしてください。
-   *   **重要:** インストール途中のオプション設定で、**「Install Npcap in WinPcap API-compatible Mode」** という項目に必ずチェックを入れてください。（これがないと動かない場合があります）
 
 ---
 
