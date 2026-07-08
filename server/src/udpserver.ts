@@ -66,6 +66,7 @@ class User {
 class Peer {
   user?: User
   challenge?: Buffer
+  buffer: Buffer = Buffer.alloc(0);
   constructor(public rinfo: AddressInfo | { address: string, port: number }, public isTcp: boolean = false, public tcpSocket?: TcpSocket){}
 }
 
@@ -121,15 +122,21 @@ export class SLPServer {
     if (protocol === 'tcp') {
       this.tcpServer = createServer((socket) => {
         const rinfo = { address: socket.remoteAddress || 'unknown', port: socket.remotePort || 0 }
-        let buffer: Buffer | null = null
+        
         socket.on('data', (data) => {
           this.byteLastSec.download += data.length
-          console.log(`DEBUG: Received ${data.length} bytes via TCP`);
-          // Very simple framing: Assume one packet per message for now, 
-          // but TCP needs proper length prefix if packets are fragmented.
-          // Since the original protocol sends packet-by-packet,
-          // we treat each chunk as a packet for now.
-          this.onMessage(data, rinfo, true, socket)
+          const peer = this.manager.get(rinfo, true, socket);
+          peer.buffer = Buffer.concat([peer.buffer, data]);
+
+          while (peer.buffer.length >= 2) {
+            const packetLen = peer.buffer.readUInt16BE(0);
+            if (peer.buffer.length < 2 + packetLen) {
+              break;
+            }
+            const packet = peer.buffer.slice(2, 2 + packetLen);
+            peer.buffer = peer.buffer.slice(2 + packetLen);
+            this.onMessage(packet, rinfo, true, socket);
+          }
         })
         socket.on('error', () => { this.manager.delete(rinfo) })
         socket.on('close', () => { this.manager.delete(rinfo) })
@@ -306,7 +313,9 @@ export class SLPServer {
   sendToRaw (addr: AddressInfo | { address: string, port: number }, msg: Buffer, isTcp: boolean, tcpSocket?: TcpSocket) {
     this.byteLastSec.upload += msg.byteLength
     if (isTcp && tcpSocket) {
-        tcpSocket.write(msg)
+        const lenBuffer = Buffer.alloc(2);
+        lenBuffer.writeUInt16BE(msg.byteLength, 0);
+        tcpSocket.write(Buffer.concat([lenBuffer, msg]));
     } else if (this.udpServer) {
         const {address, port} = addr as AddressInfo
         this.udpServer.send(msg, port, address, (error) => {

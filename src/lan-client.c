@@ -408,15 +408,20 @@ static int lan_client_send_raw(struct lan_play *lan_play, uv_buf_t *bufs, int bu
     for (i = 0; i < bufs_len; i++) total_len += bufs[i].len;
     if (total_len == 0) return 0;
 
-    char *packet = malloc(total_len);
-    cur_pos = 0;
+    int header_len = lan_play->is_tcp ? 2 : 0;
+    char *packet = malloc(total_len + header_len);
+    cur_pos = header_len;
     for (i = 0; i < bufs_len; i++) {
         memcpy(packet + cur_pos, bufs[i].base, bufs[i].len);
         cur_pos += bufs[i].len;
     }
 
     if (lan_play->is_tcp) {
-        uv_buf_t buf = uv_buf_init(packet, total_len);
+        // Add 2-byte length prefix (network byte order)
+        uint16_t len_prefix = htons(total_len);
+        memcpy(packet, &len_prefix, 2);
+        
+        uv_buf_t buf = uv_buf_init(packet, total_len + header_len);
         ret = uv_write(&lan_play->tcp_write_req, (uv_stream_t*)&lan_play->client.tcp, &buf, 1, NULL);
     } else {
         uv_buf_t buf = uv_buf_init(packet, total_len);
