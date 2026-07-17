@@ -113,6 +113,28 @@ const char* L(const char* en, const char* ja) {
     return (current_lang == LANG_JA) ? ja : en;
 }
 
+// --- Server Management ---
+struct ServerEntry {
+    std::string name;
+    std::string addr;
+};
+std::vector<ServerEntry> server_list;
+void load_servers() {
+    server_list.clear();
+    std::ifstream ifs(get_executable_dir() + "/servers.txt");
+    std::string line;
+    while (std::getline(ifs, line)) {
+        size_t pos = line.find(',');
+        if (pos != std::string::npos) {
+            server_list.push_back({line.substr(0, pos), line.substr(pos + 1)});
+        }
+    }
+}
+void save_servers() {
+    std::ofstream ofs(get_executable_dir() + "/servers.txt");
+    for (const auto& s : server_list) ofs << s.name << "," << s.addr << "\n";
+}
+
 int main(int argc, char* argv[]) {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) return -1;
 
@@ -216,36 +238,49 @@ int main(int argc, char* argv[]) {
                 }
                 ImGui::EndTabItem();
             }
+// ... in main ...
+    load_servers();
+    static char new_server_name[32] = "";
+    static char new_server_addr[64] = "";
+    static int selected_server = -1;
+
+// ... in Client Tab ...
             if (ImGui::BeginTabItem(L("Client", "クライアント"))) {
                 ImGui::Dummy(ImVec2(0, 10));
-                ImGui::InputText(L("Server Address", "サーバーアドレス"), addr, IM_ARRAYSIZE(addr));
-                if (ImGui::RadioButton("UDP##client", &client_protocol, 0)) save_settings(current_lang, server_protocol, client_protocol);
-                ImGui::SameLine();
-                if (ImGui::RadioButton("TCP##client", &client_protocol, 1)) save_settings(current_lang, server_protocol, client_protocol);
+                
+                if (ImGui::BeginListBox(L("Saved Servers", "保存済みサーバー"), ImVec2(-FLT_MIN, 5 * ImGui::GetTextLineHeightWithSpacing()))) {
+                    for (int i = 0; i < server_list.size(); i++) {
+                        if (ImGui::Selectable((server_list[i].name + " (" + server_list[i].addr + ")").c_str(), selected_server == i))
+                            selected_server = i;
+                    }
+                    ImGui::EndListBox();
+                }
+                if (ImGui::Button(L("Delete", "削除")) && selected_server != -1) {
+                    server_list.erase(server_list.begin() + selected_server);
+                    selected_server = -1;
+                    save_servers();
+                }
+                ImGui::Separator();
+                ImGui::InputText(L("Name", "名前"), new_server_name, IM_ARRAYSIZE(new_server_name));
+                ImGui::InputText(L("Address", "アドレス"), new_server_addr, IM_ARRAYSIZE(new_server_addr));
+                if (ImGui::Button(L("Add Server", "サーバー追加"))) {
+                    if (strlen(new_server_name) > 0 && strlen(new_server_addr) > 0) {
+                        server_list.push_back({new_server_name, new_server_addr});
+                        save_servers();
+                    }
+                }
+                ImGui::Separator();
+                
                 ImGui::InputText(L("Username", "ユーザー名"), nick, IM_ARRAYSIZE(nick));
                 ImGui::InputText(L("Password", "パスワード"), client_password, IM_ARRAYSIZE(client_password), ImGuiInputTextFlags_Password);
                 
-                ImGui::Dummy(ImVec2(0, 5));
-                if (ImGui::Button(L("Start Client", "クライアント開始"), ImVec2(200, 40))) {
-                    std::string server_addr = std::string(addr);
-                    if (server_addr.find(':') == std::string::npos) {
-                        server_addr += ":11451";
-                    }
-                    std::string cmd = "bin\\lan-play.exe --relay-server-addr " + server_addr;
-                    if (client_protocol == 1) cmd += " --tcp";
-                    else cmd += " --udp";
-                    
-                    // ユーザー名とパスワードをチェックし、空の場合はフラグを追加しない
-                    std::string username = std::string(nick);
-                    std::string password_str = std::string(client_password);
-                    
-                    if (!username.empty()) {
-                        cmd += " --username " + username;
-                    }
-                    if (!password_str.empty()) {
-                        cmd += " --password " + password_str;
-                    }
-                    
+                if (ImGui::Button(L("Start Client", "クライアント開始"), ImVec2(200, 40)) && selected_server != -1) {
+                    std::string cmd = "bin\\lan-play.exe --relay-server-addr " + server_list[selected_server].addr;
+                    // Auto-detection assumed by removing hardcoded flags if possible, 
+                    // or keeping default to udp and letting client negotiate.
+                    cmd += " --udp";
+                    if (strlen(nick) > 0) cmd += " --username " + std::string(nick);
+                    if (strlen(client_password) > 0) cmd += " --password " + std::string(client_password);
                     run_process(cmd);
                 }
                 ImGui::EndTabItem();

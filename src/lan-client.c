@@ -97,6 +97,7 @@ int lan_client_init(struct lan_play *lan_play)
     memset(&lan_play->frags, 0, sizeof(lan_play->frags));
 
     if (lan_play->is_tcp) {
+        lan_play->tcp_recv_buf = circular_buffer_create(65536);
         ret = uv_tcp_init(loop, &lan_play->client.tcp);
         if (ret != 0) LLOG(LLOG_ERROR, "uv_tcp_init %d", ret);
         lan_play->client.tcp.data = lan_play;
@@ -194,6 +195,10 @@ int lan_client_close(struct lan_play *lan_play)
 
     uv_close((uv_handle_t *)&lan_play->client, NULL);
     uv_close((uv_handle_t *)&lan_play->client_keepalive_timer, NULL);
+    if (lan_play->is_tcp && lan_play->tcp_recv_buf) {
+        circular_buffer_destroy(lan_play->tcp_recv_buf);
+        lan_play->tcp_recv_buf = NULL;
+    }
 
     return 0;
 }
@@ -405,10 +410,33 @@ void lan_client_on_recv_stream(uv_stream_t* stream, ssize_t nread, const uv_buf_
 {
     if (nread > 0) {
         struct lan_play *lan_play = (struct lan_play *)stream->data;
-        lan_client_on_recv_internal(lan_play, (uint8_t*)buf->base, (uint16_t)nread);
+        circular_buffer_push(lan_play->tcp_recv_buf, (uint8_t*)buf->base, nread);
+
+        while (circular_buffer_size(lan_play->tcp_recv_buf) >= 2) {
+            uint8_t len_buf[2];
+            circular_buffer_read(lan_play->tcp_recv_buf, len_buf, 2);
+            uint16_t packet_len = (len_buf[0] << 8) | len_buf[1];
+
+            if (circular_buffer_size(lan_play->tcp_recv_buf) < 2 + packet_len) {
+                break;
+            }
+
+            circular_buffer_discard(lan_play->tcp_recv_buf, 2);
+
+            uint8_t *packet = malloc(packet_len);
+            if (!packet) {
+                LLOG(LLOG_ERROR, "malloc failed for packet");
+                break;
+            }
+            circular_buffer_read(lan_play->tcp_recv_buf, packet, packet_len);
+            circular_buffer_discard(lan_play->tcp_recv_buf, packet_len);
+
+            lan_client_on_recv_internal(lan_play, packet, packet_len);
+            free(packet);
+        }
     }
-    if (buf->base) free(buf->base);
 }
+
 
 void lan_client_on_recv_internal(struct lan_play *lan_play, uint8_t *buffer, uint16_t recv_len)
 {
@@ -459,8 +487,7 @@ static int lan_client_send_raw(struct lan_play *lan_play, uv_buf_t *bufs, int bu
 
     if (lan_play->is_tcp) {
         // Add 2-byte length prefix (network byte order)
-        static uint16_t len_prefix;
-        len_prefix = htons(total_len);
+        uint16_t len_prefix = htons(total_len);
         
         uv_buf_t header_buf = uv_buf_init((char *)&len_prefix, 2);
         

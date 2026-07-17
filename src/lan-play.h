@@ -29,6 +29,7 @@ struct lan_play;
 #include "arp.h"
 #include "gateway.h"
 #include "pcaploop.h"
+#include "circular_buffer.h"
 
 #ifndef LANPLAY_VERSION
 #define LANPLAY_VERSION "unset"
@@ -63,6 +64,7 @@ struct lan_play {
         uv_udp_t udp;
         uv_tcp_t tcp;
     } client;
+    circular_buffer_t *tcp_recv_buf;
     uv_write_t tcp_write_req;
     uv_udp_send_t udp_send_req;
 

@@ -16,6 +16,7 @@ set(src
     arp.c
     helper.c
     lan-client.c
+    circular_buffer.c
     gateway.cpp
     proxy_direct.cpp
     proxy_socks5.cpp
