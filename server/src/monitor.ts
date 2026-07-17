@@ -16,7 +16,7 @@ export class ServerMonitor {
       } catch (err) {
         console.error(err)
 
-        ctx.status = err.statusCode || err.status || 500
+        ctx.status = (err as any).statusCode || (err as any).status || 500
         ctx.body = {
           error: 'server exceptions'
         }

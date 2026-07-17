@@ -42,7 +42,9 @@ function main(argv: string[]) {
   console.log(`[Data Transport] SLP server started on port ${portNum} using ${protocol.toUpperCase()} protocol`)
   let s = new SLPServer(portNum, provider, protocol)
   let monitor = new ServerMonitor(s)
-  monitor.start(portNum)
+  // TCPモード時の衝突を避けるため、監視ポートを別にする
+  const monitorPort = (protocol === 'tcp') ? (parseInt(argsObj.monitorPort || String(portNum + 1))) : portNum;
+  monitor.start(monitorPort)
 }
 
 main(process.argv.slice(2))

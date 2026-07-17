@@ -168,60 +168,45 @@ int main(int argc, char* argv[]) {
     static const ImWchar ranges[] = { 0x0020, 0x00FF, 0x3000, 0x30FF, 0x4E00, 0x9FAF, 0 };
     // フォントパスは絶対パスで指定するか、ランタイムで探す必要がある
     // ここでは単純に日本語対応フォントをロードしようとする
+#ifdef LANPLAY_LINUX
+    io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18.0f, &font_config, ranges);
+#else
     io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msgothic.ttc", 18.0f, &font_config, ranges);
+#endif
     io.FontGlobalScale = 1.0f; // サイズを調整
+bool done = false;
+static char port[10] = "11451";
+static char monitorPort[10] = "11452"; // 追加
+static char nick[64] = "Player";
+static char server_password[64] = "";
+static char client_password[64] = "";
+static int server_protocol = 0;
+static int client_protocol = 0;
 
-    bool done = false;
-    static char port[10] = "11451";
-    static char server_password[64] = "";
-    static char client_password[64] = "";
-    static char addr[64] = "127.0.0.1";
-    static char nick[32] = "";
-    static int server_protocol = 0; // 0: UDP, 1: TCP
-    static int client_protocol = 0; // 0: UDP, 1: TCP
+// 設定読み込み
+load_settings(current_lang, server_protocol, client_protocol);
 
-    load_settings(current_lang, server_protocol, client_protocol);
-
-    while (!done) {
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            ImGui_ImplSDL2_ProcessEvent(&event);
-            if (event.type == SDL_QUIT) done = true;
-        }
-
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplSDL2_NewFrame();
-        ImGui::NewFrame();
-
-        // フルスクリーン固定をやめ、ウィンドウサイズに追従させる
-        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
-        
-        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
-        ImGui::Begin("Switch LAN Play Control", nullptr, window_flags);
-
-        // UI要素の間隔を広げるためのスタイル設定
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 5));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10, 15));
-
-        if (ImGui::BeginTabBar("ModeTabs")) {
-            // --- Settings ---
-            if (ImGui::BeginTabItem(L("Settings", "設定"))) {
-                if (ImGui::RadioButton("English", current_lang == LANG_EN)) {
-                    current_lang = LANG_EN;
-                    save_settings(current_lang, server_protocol, client_protocol);
-                }
-                ImGui::SameLine();
-                if (ImGui::RadioButton("日本語", current_lang == LANG_JA)) {
-                    current_lang = LANG_JA;
-                    save_settings(current_lang, server_protocol, client_protocol);
-                }
-                ImGui::EndTabItem();
-            }
-
+while (!done) {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        ImGui_ImplSDL2_ProcessEvent(&event);
+        if (event.type == SDL_QUIT) done = true;
+    }
+    
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplSDL2_NewFrame();
+    ImGui::NewFrame();
+    
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+    ImGui::Begin("Main Window", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    if (ImGui::BeginTabBar("MainTabs")) {
             if (ImGui::BeginTabItem(L("Server", "サーバー"))) {
                 ImGui::Dummy(ImVec2(0, 10)); // 上部に余白
                 ImGui::InputText(L("Port", "ポート"), port, IM_ARRAYSIZE(port));
+                if (server_protocol == 1) {
+                    ImGui::InputText(L("Monitor Port", "監視ポート"), monitorPort, IM_ARRAYSIZE(monitorPort));
+                }
                 if (ImGui::RadioButton("UDP##server", &server_protocol, 0)) save_settings(current_lang, server_protocol, client_protocol);
                 ImGui::SameLine();
                 if (ImGui::RadioButton("TCP##server", &server_protocol, 1)) save_settings(current_lang, server_protocol, client_protocol);
@@ -230,14 +215,22 @@ int main(int argc, char* argv[]) {
                 ImGui::Dummy(ImVec2(0, 5));
                 if (ImGui::Button(L("Start Server", "サーバー開始"), ImVec2(150, 40))) {
                     // Windowsではnodeを使ってts-nodeを読み込むのが確実
+#ifdef LANPLAY_LINUX
+                    std::string cmd = "node server/node_modules/ts-node/dist/bin.js server/src/main.ts --port " + std::string(port);
+#else
                     std::string cmd = "node server\\node_modules\\ts-node\\dist\\bin.js server\\src\\main.ts --port " + std::string(port);
-                    if (server_protocol == 1) cmd += " --protocol tcp";
-                    else cmd += " --protocol udp";
+#endif
+                    cmd += " --monitorPort " + std::string(monitorPort); // 常時追加
+                    if (server_protocol == 1) {
+                        cmd += " --protocol tcp";
+                    } else cmd += " --protocol udp";
                     if (strlen(server_password) > 0) cmd += " --password " + std::string(server_password);
                     run_process(cmd, true);
                 }
                 ImGui::EndTabItem();
             }
+// ...
+
 // ... in main ...
     load_servers();
     static char new_server_name[32] = "";
@@ -311,8 +304,6 @@ int main(int argc, char* argv[]) {
             }
             ImGui::EndTabBar();
         }
-
-        ImGui::PopStyleVar(2); // StyleVarを元に戻す
 
         ImGui::Dummy(ImVec2(0, 20));
         ImGui::Separator();

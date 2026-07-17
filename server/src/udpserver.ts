@@ -1,5 +1,5 @@
-import { createSocket, Socket, AddressInfo } from 'dgram'
-import { createServer, Socket as TcpSocket, Server as TcpServer } from 'net'
+import { createSocket, Socket } from 'dgram'
+import { AddressInfo, createServer, Socket as TcpSocket, Server as TcpServer } from 'net'
 import { AuthProvider } from './auth'
 import { randomFill as randomFillAsync } from 'crypto'
 const randomFill = (buf: Buffer, offset: number) => new Promise((res, rej) => randomFillAsync(buf, offset, (err, buf) => {
@@ -275,7 +275,7 @@ export class SLPServer {
             this.sendInfo(peer, 'Error when login: Wrong password')
           }
         } catch (e) {
-          err = `Error when login: ${e.message}`
+          err = `Error when login: ${(e as Error).message}`
         }
         if (err.length > 0) {
           console.log(`${err} user: ${username}`)
